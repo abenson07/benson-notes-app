@@ -131,17 +131,18 @@ Upload audio (web app)
 
 ### Environment Variables
 
+Copy `.env.local.example` to `.env.local` and set:
+
 ```bash
-N8N_BASE_URL=https://your-n8n-instance.com
-N8N_UPLOAD_WEBHOOK=your-webhook-path
-N8N_API_KEY=your-n8n-api-key-if-set
+NEXT_PUBLIC_N8N_BASE_URL=https://your-n8n-instance.com
+NEXT_PUBLIC_N8N_WEBHOOK_PATH=webhook
 ```
+
+The app calls `{BASE_URL}/{WEBHOOK_PATH}/voice-upload`, `.../projects`, `.../projects/:id`, etc.
 
 ### Install & Run
 
 ```bash
-git clone https://github.com/yourusername/voicelog.git
-cd voicelog
 npm install
 npm run dev
 ```
@@ -150,11 +151,10 @@ App runs at `http://localhost:3000`
 
 ### n8n Setup
 
-1. Import workflow files from `/n8n-workflows/` into your n8n instance
-2. Configure Whisper API credentials in n8n
-3. Configure Ollama base URL in n8n
-4. Activate all workflows
-5. Copy webhook URLs into your `.env`
+1. **Create tables:** In n8n, open the **VoiceLog Bootstrap Tables** workflow and run it once (Execute Workflow) to create the Projects and Recordings data tables.
+2. **Credentials:** In the **Upload & Process Recording** workflow, set the Whisper (OpenAI API) credential on the Whisper node. Ensure Ollama is reachable at `http://localhost:11434` (or update the Ollama nodes’ URL in that workflow).
+3. **Activate:** Activate all six VoiceLog workflows (Upload & Process Recording, Get Projects, Get Project, Get Recordings, Get Recording, Update Project) so production webhooks are registered.
+4. Your webhook base will be `https://your-n8n-instance.com/webhook/` with paths: `voice-upload`, `projects`, `projects/:project_id`, etc.
 
 ---
 
