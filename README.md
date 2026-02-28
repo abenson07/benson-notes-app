@@ -1,16 +1,19 @@
 # VoiceLog
 
-A mobile-responsive web app for uploading, transcribing, and organizing voice recordings into structured projects. Upload an audio file, get a transcript and summary back, and watch your project knowledge base grow with every recording.
+A mobile-responsive web app for uploading, transcribing, and organizing voice recordings into structured projects. Upload an audio file, get a transcript and AI-generated summary back, and watch your project knowledge base grow with every recording.
+
+The web app is purely frontend — all processing logic (transcription, summarization, storage) lives in n8n workflows.
 
 ---
 
 ## What It Does
 
 - Upload audio recordings (mp3, m4a, wav, webm, ogg — max 25MB)
-- Transcribes audio via the Whisper API
-- Generates per-recording summaries via a self-hosted Ollama instance
-- Organizes recordings into projects with a living transcript and an AI-updated project summary
-- Discards audio after transcription — only text is stored
+- Sends audio to Whisper API for transcription via n8n
+- Generates per-recording summaries via self-hosted Ollama
+- Auto-creates a project if no project context exists at upload time
+- Builds a living project transcript (append-only) and an AI-updated project summary
+- Discards audio after transcription — only text is stored in n8n Tables
 
 ---
 
@@ -19,10 +22,32 @@ A mobile-responsive web app for uploading, transcribing, and organizing voice re
 | Layer | Technology |
 |---|---|
 | Frontend | Next.js (mobile-responsive) |
-| Transcription | Whisper API |
-| Summarization | Ollama (self-hosted on VPS) |
-| Storage | Database TBD — transcripts and summaries only |
+| Orchestration | Self-hosted n8n |
+| Transcription | Whisper API (called from n8n) |
+| Summarization | Self-hosted Ollama on VPS (called from n8n) |
+| Storage | n8n Tables |
 | Auth | None — single user |
+
+---
+
+## Architecture
+
+```
+Web App (Next.js)
+    │
+    ├── POST audio + project_id → n8n Webhook
+    │       │
+    │       ├── Whisper API → raw transcript
+    │       ├── Discard audio
+    │       ├── Ollama → recording summary
+    │       ├── Ollama → project title (first recording only)
+    │       ├── Append to project transcript
+    │       ├── Ollama → updated project summary
+    │       └── Write to n8n Tables
+    │
+    └── Poll for status → navigate on completion
+        Read project + recording data from n8n webhook endpoints
+```
 
 ---
 
@@ -30,25 +55,23 @@ A mobile-responsive web app for uploading, transcribing, and organizing voice re
 
 ```
 /
-├── app/                  # Next.js app directory
-│   ├── page.tsx          # Home / project list (/)
-│   ├── projects/
-│   │   └── [project_id]/
-│   │       ├── page.tsx                        # Project detail
-│   │       └── recordings/
-│   │           ├── page.tsx                    # Recordings list
-│   │           └── [recording_id]/
-│   │               └── page.tsx                # Recording detail
-├── components/           # Shared UI components
-│   ├── UploadSheet/      # Bottom sheet upload flow
-│   ├── TabView/          # Summary / Transcript tab pattern
-│   └── SearchBar/        # Inline search with highlight
+├── app/                        # Next.js app directory
+│   ├── page.tsx                # Home / project list (/)
+│   └── projects/
+│       └── [project_id]/
+│           ├── page.tsx        # Project detail
+│           └── recordings/
+│               ├── page.tsx    # Recordings list
+│               └── [recording_id]/
+│                   └── page.tsx  # Recording detail
+├── components/
+│   ├── UploadSheet/            # Bottom sheet upload + processing flow
+│   ├── TabView/                # Summary / Transcript tab pattern
+│   └── SearchBar/              # Inline search with highlight
 ├── lib/
-│   ├── whisper.ts        # Whisper API integration
-│   ├── ollama.ts         # Ollama summarization calls
-│   └── processing.ts     # Upload → transcribe → summarize pipeline
+│   └── api.ts                  # n8n webhook calls + polling logic
 ├── docs/
-│   └── PRD.md            # Full product requirements document
+│   └── PRD.md                  # Full product requirements document
 └── README.md
 ```
 
@@ -60,24 +83,39 @@ A mobile-responsive web app for uploading, transcribing, and organizing voice re
 |---|---|
 | `/` | Home — project list or empty state |
 | `/projects/:project_id` | Project detail — summary, transcript, upload |
-| `/projects/:project_id/recordings` | Recordings list |
-| `/projects/:project_id/recordings/:recording_id` | Recording detail |
+| `/projects/:project_id/recordings` | Recordings list (read-only) |
+| `/projects/:project_id/recordings/:recording_id` | Recording detail (read-only) |
+
+---
+
+## n8n Workflows
+
+| Workflow | Trigger | Description |
+|---|---|---|
+| WORKFLOW-001 | POST (webhook) | Upload audio, transcribe, summarize, store |
+| WORKFLOW-002 | GET (webhook) | Return all projects |
+| WORKFLOW-003 | GET (webhook) | Return single project detail |
+| WORKFLOW-004 | GET (webhook) | Return recordings list for a project |
+| WORKFLOW-005 | GET (webhook) | Return single recording detail |
+| WORKFLOW-006 | PATCH (webhook) | Update project title / description |
 
 ---
 
 ## Processing Pipeline
 
 ```
-Upload audio
+Upload audio (web app)
+    → POST to n8n webhook
     → Validate (format + size ≤ 25MB)
-    → Submit to Whisper API
-    → Receive raw transcript
+    → Auto-create project if no project_id
+    → Submit to Whisper API → raw transcript
     → Discard audio
-    → Generate recording summary (Ollama)
-    → If first recording: generate project title (Ollama)
-    → Append transcript to project transcript
-    → Regenerate project summary (Ollama)
-    → Done
+    → Ollama → recording summary
+    → If first recording: Ollama → project title
+    → Append transcript to project_transcript
+    → Ollama → updated project_summary
+    → Set status: done
+    → Web app polls → navigates on completion
 ```
 
 ---
@@ -87,15 +125,16 @@ Upload audio
 ### Prerequisites
 
 - Node.js 18+
+- Self-hosted n8n instance
 - Whisper API key
-- Ollama running on a accessible VPS or locally
+- Ollama running on an accessible VPS
 
 ### Environment Variables
 
 ```bash
-WHISPER_API_KEY=your_key_here
-OLLAMA_BASE_URL=http://your-vps:11434
-OLLAMA_MODEL=your_model_name
+N8N_BASE_URL=https://your-n8n-instance.com
+N8N_UPLOAD_WEBHOOK=your-webhook-path
+N8N_API_KEY=your-n8n-api-key-if-set
 ```
 
 ### Install & Run
@@ -109,18 +148,26 @@ npm run dev
 
 App runs at `http://localhost:3000`
 
+### n8n Setup
+
+1. Import workflow files from `/n8n-workflows/` into your n8n instance
+2. Configure Whisper API credentials in n8n
+3. Configure Ollama base URL in n8n
+4. Activate all workflows
+5. Copy webhook URLs into your `.env`
+
 ---
 
 ## Roadmap
 
-- [x] MVP — upload, transcribe, summarize, organize
+- [x] MVP — upload, transcribe, summarize, organize via n8n
 - [ ] In-app recording (Android, screen-off + Bluetooth)
 - [ ] Chat interface for querying projects (LLM + VectorStore)
-- [ ] Multi-user / auth layer
 - [ ] Native mobile app (React Native)
+- [ ] Multi-user / auth layer
 
 ---
 
 ## Docs
 
-Full PRD with data model, task breakdown, and UI specs: [`docs/PRD.md`](./docs/PRD.md)
+Full PRD with data model, task breakdown, n8n workflow specs, and UI details: [`docs/PRD.md`](./docs/PRD.md)
